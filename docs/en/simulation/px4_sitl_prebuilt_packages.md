@@ -127,6 +127,40 @@ On Linux, you can skip individual port flags and use `--network host` instead:
 docker run --rm -it --network host px4io/px4-sitl:latest
 ```
 
+### ROS 2 Development Images
+
+The ROS development variants add ROS 2 Jazzy, Micro XRCE-DDS Agent v2.4.3, `px4_msgs`, and the [PX4 ROS 2 Interface Library](../ros2/px4_ros2_interface_lib.md), including its examples and development tools.
+They support `amd64` and `arm64`, with the same version tags as the runtime images.
+The ROS message definitions match the packaged PX4 firmware.
+
+| Image | Simulator |
+| ----- | --------- |
+| `px4io/px4-sitl-ros2:<tag>` | SIH, without Gazebo dependencies |
+| `px4io/px4-sitl-gazebo-ros2:<tag>` | Gazebo Harmonic, including the ROS-Gazebo bridge |
+
+Unlike the runtime images, these open a shell with ROS and the workspace at `/opt/px4_ros2` already sourced.
+PX4 and the DDS Agent are started explicitly and communicate inside the same container.
+
+```sh
+# Terminal 1: open the development environment and start the Agent.
+docker run --rm -it --name px4-ros2 \
+  -v "$PWD:/workspace" px4io/px4-sitl-ros2:latest
+MicroXRCEAgent udp4 -p 8888
+
+# Terminal 2: start the packaged SIH simulator.
+docker exec -it px4-ros2 /usr/local/bin/ros2-entrypoint.sh px4
+
+# Terminal 3: inspect the ROS topics.
+docker exec -it px4-ros2 /usr/local/bin/ros2-entrypoint.sh ros2 topic list
+```
+
+For Gazebo, use `px4io/px4-sitl-gazebo-ros2` and replace `px4` with `env HEADLESS=1 px4-gazebo`.
+Host ROS nodes require additional DDS networking configuration; the example keeps ROS, the Agent and PX4 together and does not require host networking.
+
+When testing modified PX4 firmware, rebuild the ROS workspace against its message definitions rather than using the bundled library.
+Use `--entrypoint /bin/bash` and source `/opt/ros/jazzy/setup.bash` to start without the bundled workspace.
+These images do not change the existing ROS integration-test workflow.
+
 ## Configuration
 
 These options apply to both `.deb` packages and containers.

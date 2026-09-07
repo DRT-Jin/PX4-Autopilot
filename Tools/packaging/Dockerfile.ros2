@@ -1,0 +1,73 @@
+# syntax=docker/dockerfile:1
+# Shared ROS development layer. Bake supplies the SIH or Gazebo image as "sitl".
+FROM sitl
+
+ARG ROS_APT_SOURCE_VERSION=1.2.0
+ARG XRCE_AGENT_REF=73622810d984349b80bbac0ef55fc0b694d62222
+ARG PX4_MSGS_REF=8fb8277cf95c4ba87094146bc8922e76c4ac0799
+ARG PX4_ROS2_REF=7e082628e89ec1825e19ca59f5f1c5deebd1f844
+
+ENV ROS_DISTRO=jazzy
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+ENV RUNS_IN_DOCKER=true
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && curl -fsSL "https://github.com/ros-infrastructure/ros-apt-source/releases/download/${ROS_APT_SOURCE_VERSION}/ros2-apt-source_${ROS_APT_SOURCE_VERSION}.noble_all.deb" \
+        -o /tmp/ros2-apt-source.deb \
+    && apt-get install -y --no-install-recommends /tmp/ros2-apt-source.deb \
+    && rm /tmp/ros2-apt-source.deb \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential ccache cmake git ninja-build \
+        python3-empy ros-dev-tools ros-jazzy-ros-base \
+    && if [ -d /opt/px4-gazebo ]; then \
+        apt-get install -y --no-install-recommends ros-jazzy-ros-gz; \
+    fi
+
+# Use Jazzy's Fast DDS/CDR and the Agent's pinned, statically linked logger.
+RUN source /opt/ros/jazzy/setup.bash \
+    && git clone https://github.com/eProsima/Micro-XRCE-DDS-Agent.git /tmp/agent \
+    && git -C /tmp/agent checkout "${XRCE_AGENT_REF}" \
+    && cmake -S /tmp/agent -B /tmp/agent/build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DUAGENT_USE_SYSTEM_FASTDDS=ON \
+        -DUAGENT_USE_SYSTEM_FASTCDR=ON \
+        -DUAGENT_P2P_PROFILE=OFF \
+    && cmake --build /tmp/agent/build --parallel 4 \
+    && cmake --install /tmp/agent/build \
+    && ldconfig \
+    && rm -rf /tmp/agent
+
+WORKDIR /opt/px4_ros2
+RUN git clone https://github.com/PX4/px4_msgs.git src/px4_msgs \
+    && git -C src/px4_msgs checkout "${PX4_MSGS_REF}" \
+    && rm -rf src/px4_msgs/msg src/px4_msgs/srv \
+    && git clone https://github.com/Auterion/px4-ros2-interface-lib.git src/px4-ros2-interface-lib \
+    && git -C src/px4-ros2-interface-lib checkout "${PX4_ROS2_REF}"
+
+# Definitions come from the same checkout as the parent image's PX4 package.
+COPY px4_msgs/ src/px4_msgs/
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    source /opt/ros/jazzy/setup.bash \
+    && rosdep init \
+    && rosdep update --rosdistro jazzy \
+    && apt-get update \
+    && rosdep install --from-paths src --ignore-src --rosdistro jazzy -y \
+    && CMAKE_BUILD_PARALLEL_LEVEL=4 colcon build --symlink-install \
+        --executor sequential --cmake-args -DCMAKE_BUILD_TYPE=Release \
+    && colcon test --packages-select px4_ros2_cpp --ctest-args -R unit_tests \
+    && colcon test-result --verbose
+
+COPY --chmod=755 ros2-entrypoint.sh /usr/local/bin/ros2-entrypoint.sh
+# PX4 locates its ROMFS relative to the executable, not the /usr/bin symlink.
+ENV PATH=/opt/px4-gazebo/bin:/opt/px4/bin:${PATH}
+WORKDIR /workspace
+ENTRYPOINT ["/usr/local/bin/ros2-entrypoint.sh"]
+CMD ["/bin/bash"]

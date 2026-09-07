@@ -129,10 +129,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { image: sih,    repo: px4-sitl,        target: sih,     arch: amd64, runner: x64,   platform: "linux/amd64", dockerfile: Dockerfile.sih }
-          - { image: sih,    repo: px4-sitl,        target: sih,     arch: arm64, runner: arm64, platform: "linux/arm64", dockerfile: Dockerfile.sih }
-          - { image: gazebo, repo: px4-sitl-gazebo, target: default, arch: amd64, runner: x64,   platform: "linux/amd64", dockerfile: Dockerfile.gazebo }
-          - { image: gazebo, repo: px4-sitl-gazebo, target: default, arch: arm64, runner: arm64, platform: "linux/arm64", dockerfile: Dockerfile.gazebo }
+          - { image: sih,    repo: px4-sitl,        target: sih,     arch: amd64, runner: x64,   platform: "linux/amd64" }
+          - { image: sih,    repo: px4-sitl,        target: sih,     arch: arm64, runner: arm64, platform: "linux/arm64" }
+          - { image: gazebo, repo: px4-sitl-gazebo, target: default, arch: amd64, runner: x64,   platform: "linux/amd64" }
+          - { image: gazebo, repo: px4-sitl-gazebo, target: default, arch: arm64, runner: arm64, platform: "linux/arm64" }
     steps:
       - uses: runs-on/action@v2
       - uses: actions/checkout@v6
@@ -146,7 +146,11 @@ jobs:
           path: docker-context
 
       - name: Prepare build context
-        run: cp Tools/packaging/px4-entrypoint.sh docker-context/
+        run: |
+          cp Tools/packaging/Dockerfile.* Tools/packaging/*entrypoint.sh docker-context/
+          mkdir -p docker-context/px4_msgs/msg docker-context/px4_msgs/srv
+          cp msg/*.msg msg/versioned/*.msg docker-context/px4_msgs/msg/
+          cp srv/*.srv docker-context/px4_msgs/srv/
 
       - name: Login to registries
         if: needs.setup.outputs.should_push == 'true'
@@ -160,22 +164,29 @@ jobs:
           driver: docker-container
           platforms: ${{ matrix.platform }}
 
-      - name: Build and push container image
-        uses: docker/build-push-action@v7
+      - name: Build and push container images
+        uses: docker/bake-action@v7
+        env:
+          SIMULATOR: ${{ matrix.image }}
         with:
-          context: docker-context
-          file: Tools/packaging/${{ matrix.dockerfile }}
-          tags: |
-            px4io/${{ matrix.repo }}:${{ needs.setup.outputs.px4_version }}-${{ matrix.arch }}
-            px4io/${{ matrix.repo }}:latest-${{ matrix.arch }}
-            ghcr.io/px4/${{ matrix.repo }}:${{ needs.setup.outputs.px4_version }}-${{ matrix.arch }}
-            ghcr.io/px4/${{ matrix.repo }}:latest-${{ matrix.arch }}
-          platforms: ${{ matrix.platform }}
-          load: false
+          source: .
+          files: Tools/packaging/docker-bake.hcl
           push: ${{ needs.setup.outputs.should_push == 'true' }}
           provenance: false
-          cache-from: type=gha,scope=sitl-${{ matrix.image }}-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=sitl-${{ matrix.image }}-${{ matrix.arch }}
+          set: |
+            *.platform=${{ matrix.platform }}
+            sitl.tags=px4io/${{ matrix.repo }}:${{ needs.setup.outputs.px4_version }}-${{ matrix.arch }}
+            sitl.tags+=px4io/${{ matrix.repo }}:latest-${{ matrix.arch }}
+            sitl.tags+=ghcr.io/px4/${{ matrix.repo }}:${{ needs.setup.outputs.px4_version }}-${{ matrix.arch }}
+            sitl.tags+=ghcr.io/px4/${{ matrix.repo }}:latest-${{ matrix.arch }}
+            ros2.tags=px4io/${{ matrix.repo }}-ros2:${{ needs.setup.outputs.px4_version }}-${{ matrix.arch }}
+            ros2.tags+=px4io/${{ matrix.repo }}-ros2:latest-${{ matrix.arch }}
+            ros2.tags+=ghcr.io/px4/${{ matrix.repo }}-ros2:${{ needs.setup.outputs.px4_version }}-${{ matrix.arch }}
+            ros2.tags+=ghcr.io/px4/${{ matrix.repo }}-ros2:latest-${{ matrix.arch }}
+            sitl.cache-from=type=gha,scope=sitl-${{ matrix.image }}-${{ matrix.arch }}
+            sitl.cache-to=type=gha,mode=max,scope=sitl-${{ matrix.image }}-${{ matrix.arch }}
+            ros2.cache-from=type=gha,scope=ros2-${{ matrix.image }}-${{ matrix.arch }}
+            ros2.cache-to=type=gha,mode=max,scope=ros2-${{ matrix.image }}-${{ matrix.arch }}
 
   # ---------------------------------------------------------------------------
   # Deploy: create multi-arch manifests and push to registries
@@ -190,6 +201,8 @@ jobs:
         include:
           - { image: sih,    repo: px4-sitl }
           - { image: gazebo, repo: px4-sitl-gazebo }
+          - { image: sih-ros2, repo: px4-sitl-ros2 }
+          - { image: gazebo-ros2, repo: px4-sitl-gazebo-ros2 }
     steps:
       - uses: runs-on/action@v2
 
