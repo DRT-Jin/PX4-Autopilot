@@ -43,19 +43,22 @@ A failed step is not committed as an image layer.
 Changing an input invalidates its layer and subsequent layers, not earlier ones.
 
 The ROS Dockerfile declares each source pin immediately before its first use.
-ROS installation, rosdep metadata, the DDS Agent, message-package metadata, interface-library sources, dependency installation, compilation and tests have separate cache boundaries.
-Message definitions are copied after dependency installation, so changing them with an unchanged parent does not repeat `rosdep install`.
+The base ROS/rosdep setup, DDS Agent, message-package metadata, interface-library sources, workspace dependency installation, compilation and tests have separate cache boundaries.
+Message definitions are copied after dependency installation, so changing them does not repeat `rosdep install`.
 Changing only the ROS entrypoint does not rebuild the workspace, and changing only the test command does not recompile it.
 
-A changed parent image, including a new packaged PX4 binary, necessarily invalidates the child layers.
-Cache boundaries do not make different firmware versions interchangeable.
+The Agent and ROS workspace build in independent Ubuntu 24.04/Jazzy stages, keyed to source pins and the supplied PX4 message definitions rather than the packaged firmware.
+A new PX4 binary with unchanged messages reuses those compilation and test layers.
+Changed messages invalidate workspace compilation and tests; cached artifacts never substitute messages from another checkout.
+The final image still derives from the connected SIH/Gazebo parent and installs its Ubuntu/ROS dependencies using the same helper as the builder.
+Only the source-built Agent/logger and complete ROS workspace are copied, preserving the source/build/install layout and absolute symlinks without copying the builder's operating system or package database.
 APT cache mounts are held only during installation, not during compilation or tests.
 The runtime Dockerfiles extract the package's `Depends` field into a separate stage, so their dependency layers are keyed to that field rather than to every firmware binary change.
 Package jobs disable Ubuntu's container cleanup hook so downloaded APT archives survive installation and can be cached between runs.
 
 In Actions, `CACHE_GHA=true` enables one cache per simulator and architecture.
 The ROS target exports `mode=max`, covering its entire graph including the runtime parent.
-The compiler cache is persisted separately with `actions/cache` and `buildkit-cache-dance`, allowing unchanged compilation units to be reused even when the parent image changes.
+The compiler cache is persisted separately with `actions/cache` and `buildkit-cache-dance`, allowing unchanged compilation units to be reused when workspace inputs change.
 Ccache checks compiler contents and source/header inputs; it does not substitute an old ROS workspace for changed PX4 messages.
 The container jobs use eight native CPUs, matching the Dockerfile's `BUILD_JOBS` default.
 Override that build argument with Bake's `--set ros2.args.BUILD_JOBS=4` when building on a smaller machine.

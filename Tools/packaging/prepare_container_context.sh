@@ -7,6 +7,7 @@ context_dir="${1:-docker-context}"
 
 mkdir -p "$context_dir/px4_msgs/msg" "$context_dir/px4_msgs/srv"
 cp "$script_dir"/Dockerfile.* "$script_dir"/*entrypoint.sh "$script_dir/px4-network.sh" "$context_dir/"
+cp "$script_dir/ros2-install-dependencies.sh" "$context_dir/"
 
 # Refresh generated definitions when reusing a context; keep downloaded .debs.
 rm -f "$context_dir/px4_msgs/msg/"*.msg "$context_dir/px4_msgs/srv/"*.srv
