@@ -43,7 +43,13 @@ public:
 	int GetMessageSize(int message_type);
 	bool Send(const uint8_t message_id, const void *payload);
 	bool Send(const uint8_t message_id, const void *payload, uint32_t payload_size);
-	int Receive(uint8_t *payload, uint8_t *message_id);
+	/**
+	 * Read one MSP frame into `payload`.
+	 * @param payload_capacity size of `payload` in bytes; a frame that advertises more
+	 *        payload than fits is rejected rather than truncated.
+	 * @return payload size on success, negative errno otherwise
+	 */
+	int Receive(uint8_t *payload, uint8_t *message_id, size_t payload_capacity);
 
 private:
 	int _fd{-1};
