@@ -51,6 +51,7 @@ A changed parent image, including a new packaged PX4 binary, necessarily invalid
 Cache boundaries do not make different firmware versions interchangeable.
 APT cache mounts are held only during installation, not during compilation or tests.
 The runtime Dockerfiles extract the package's `Depends` field into a separate stage, so their dependency layers are keyed to that field rather than to every firmware binary change.
+Package jobs disable Ubuntu's container cleanup hook so downloaded APT archives survive installation and can be cached between runs.
 
 In Actions, `CACHE_GHA=true` enables one cache per simulator and architecture.
 The ROS target exports `mode=max`, covering its entire graph including the runtime parent.
