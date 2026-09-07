@@ -124,15 +124,17 @@ jobs:
   build-docker:
     name: "Build Image (${{ matrix.image }}/${{ matrix.arch }})"
     needs: [setup, build-deb]
-    runs-on: [runs-on,"runner=4cpu-linux-${{ matrix.runner }}","image=ubuntu24-full-${{ matrix.runner }}","run-id=${{ github.run_id }}",extras=s3-cache,spot=false]
+    runs-on: [runs-on,"runner=8cpu-linux-${{ matrix.runner }}","image=ubuntu24-full-${{ matrix.runner }}","run-id=${{ github.run_id }}",extras=s3-cache,spot=false]
     strategy:
       fail-fast: false
       matrix:
+        arch: [amd64, arm64]
+        image: [sih, gazebo]
         include:
-          - { image: sih,    repo: px4-sitl,        target: sih,     arch: amd64, runner: x64,   platform: "linux/amd64" }
-          - { image: sih,    repo: px4-sitl,        target: sih,     arch: arm64, runner: arm64, platform: "linux/arm64" }
-          - { image: gazebo, repo: px4-sitl-gazebo, target: default, arch: amd64, runner: x64,   platform: "linux/amd64" }
-          - { image: gazebo, repo: px4-sitl-gazebo, target: default, arch: arm64, runner: arm64, platform: "linux/arm64" }
+          - { arch: amd64, runner: x64 }
+          - { arch: arm64, runner: arm64 }
+          - { image: sih, target: sih }
+          - { image: gazebo, target: default }
     steps:
       - uses: runs-on/action@v2
       - uses: actions/checkout@v6
@@ -146,11 +148,7 @@ jobs:
           path: docker-context
 
       - name: Prepare build context
-        run: |
-          cp Tools/packaging/Dockerfile.* Tools/packaging/*entrypoint.sh docker-context/
-          mkdir -p docker-context/px4_msgs/msg docker-context/px4_msgs/srv
-          cp msg/*.msg msg/versioned/*.msg docker-context/px4_msgs/msg/
-          cp srv/*.srv docker-context/px4_msgs/srv/
+        run: bash Tools/packaging/prepare_container_context.sh
 
       - name: Login to registries
         if: needs.setup.outputs.should_push == 'true'
@@ -160,49 +158,51 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
+        id: buildx
         with:
           driver: docker-container
-          platforms: ${{ matrix.platform }}
+          platforms: linux/${{ matrix.arch }}
+
+      - name: Restore ROS compiler cache
+        uses: actions/cache@v5
+        id: ros-cache
+        with:
+          path: ros-ccache
+          key: ros-ccache-${{ matrix.arch }}-${{ matrix.image }}-${{ github.sha }}
+          restore-keys: ros-ccache-${{ matrix.arch }}-
+
+      - name: Reuse compiler cache across image layers
+        uses: reproducible-containers/buildkit-cache-dance@v3
+        with:
+          builder: ${{ steps.buildx.outputs.name }}
+          cache-map: '{"ros-ccache": {"target": "/root/.cache/ccache", "sharing": "locked"}}'
+          skip-extraction: ${{ steps.ros-cache.outputs.cache-hit }}
 
       - name: Build and push container images
         uses: docker/bake-action@v7
         env:
           SIMULATOR: ${{ matrix.image }}
+          VERSION: ${{ needs.setup.outputs.px4_version }}
+          ARCH: ${{ matrix.arch }}
+          CACHE_GHA: "true"
         with:
           source: .
           files: Tools/packaging/docker-bake.hcl
           push: ${{ needs.setup.outputs.should_push == 'true' }}
+          sbom: true
           provenance: false
-          set: |
-            *.platform=${{ matrix.platform }}
-            sitl.tags=px4io/${{ matrix.repo }}:${{ needs.setup.outputs.px4_version }}-${{ matrix.arch }}
-            sitl.tags+=px4io/${{ matrix.repo }}:latest-${{ matrix.arch }}
-            sitl.tags+=ghcr.io/px4/${{ matrix.repo }}:${{ needs.setup.outputs.px4_version }}-${{ matrix.arch }}
-            sitl.tags+=ghcr.io/px4/${{ matrix.repo }}:latest-${{ matrix.arch }}
-            ros2.tags=px4io/${{ matrix.repo }}-ros2:${{ needs.setup.outputs.px4_version }}-${{ matrix.arch }}
-            ros2.tags+=px4io/${{ matrix.repo }}-ros2:latest-${{ matrix.arch }}
-            ros2.tags+=ghcr.io/px4/${{ matrix.repo }}-ros2:${{ needs.setup.outputs.px4_version }}-${{ matrix.arch }}
-            ros2.tags+=ghcr.io/px4/${{ matrix.repo }}-ros2:latest-${{ matrix.arch }}
-            sitl.cache-from=type=gha,scope=sitl-${{ matrix.image }}-${{ matrix.arch }}
-            sitl.cache-to=type=gha,mode=max,scope=sitl-${{ matrix.image }}-${{ matrix.arch }}
-            ros2.cache-from=type=gha,scope=ros2-${{ matrix.image }}-${{ matrix.arch }}
-            ros2.cache-to=type=gha,mode=max,scope=ros2-${{ matrix.image }}-${{ matrix.arch }}
 
   # ---------------------------------------------------------------------------
   # Deploy: create multi-arch manifests and push to registries
   # ---------------------------------------------------------------------------
   deploy:
-    name: "Deploy (${{ matrix.image }})"
+    name: "Deploy (${{ matrix.repo }})"
     needs: [setup, build-docker]
     if: needs.setup.outputs.should_push == 'true'
     runs-on: [runs-on,"runner=1cpu-linux-x64","image=ubuntu24-full-x64","run-id=${{ github.run_id }}",extras=s3-cache,spot=false]
     strategy:
       matrix:
-        include:
-          - { image: sih,    repo: px4-sitl }
-          - { image: gazebo, repo: px4-sitl-gazebo }
-          - { image: sih-ros2, repo: px4-sitl-ros2 }
-          - { image: gazebo-ros2, repo: px4-sitl-gazebo-ros2 }
+        repo: [px4-sitl, px4-sitl-gazebo, px4-sitl-ros2, px4-sitl-gazebo-ros2]
     steps:
       - uses: runs-on/action@v2
 
@@ -211,6 +211,8 @@ jobs:
           echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
+      - uses: docker/setup-buildx-action@v4
+
       - name: Create and push multi-arch manifests
         run: |
           VERSION="${{ needs.setup.outputs.px4_version }}"
@@ -218,14 +220,7 @@ jobs:
           for REGISTRY in px4io ghcr.io/px4; do
             IMAGE="${REGISTRY}/${{ matrix.repo }}"
 
-            for TAG in ${VERSION} latest; do
-              docker manifest create ${IMAGE}:${TAG} \
-                --amend ${IMAGE}:${TAG}-arm64 \
-                --amend ${IMAGE}:${TAG}-amd64
-
-              docker manifest annotate ${IMAGE}:${TAG} ${IMAGE}:${TAG}-arm64 --arch arm64
-              docker manifest annotate ${IMAGE}:${TAG} ${IMAGE}:${TAG}-amd64 --arch amd64
-
-              docker manifest push ${IMAGE}:${TAG}
-            done
+            docker buildx imagetools create \
+              --tag "${IMAGE}:${VERSION}" --tag "${IMAGE}:latest" \
+              "${IMAGE}:${VERSION}-arm64" "${IMAGE}:${VERSION}-amd64"
           done

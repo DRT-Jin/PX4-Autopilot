@@ -2,11 +2,6 @@
 # Shared ROS development layer. Bake supplies the SIH or Gazebo image as "sitl".
 FROM sitl
 
-ARG ROS_APT_SOURCE_VERSION=1.2.0
-ARG XRCE_AGENT_REF=73622810d984349b80bbac0ef55fc0b694d62222
-ARG PX4_MSGS_REF=8fb8277cf95c4ba87094146bc8922e76c4ac0799
-ARG PX4_ROS2_REF=7e082628e89ec1825e19ca59f5f1c5deebd1f844
-
 ENV ROS_DISTRO=jazzy
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
@@ -14,6 +9,7 @@ ENV RUNS_IN_DOCKER=true
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
+ARG ROS_APT_SOURCE_VERSION=1.2.0
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update \
@@ -27,7 +23,11 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         build-essential ccache cmake git ninja-build \
         python3-empy ros-dev-tools ros-jazzy-ros-base
 
+RUN rosdep init && rosdep update --rosdistro jazzy
+
 # Use Jazzy's Fast DDS/CDR and the Agent's pinned, statically linked logger.
+ARG XRCE_AGENT_REF=73622810d984349b80bbac0ef55fc0b694d62222
+ARG BUILD_JOBS=8
 RUN source /opt/ros/jazzy/setup.bash \
     && git clone https://github.com/eProsima/Micro-XRCE-DDS-Agent.git /tmp/agent \
     && git -C /tmp/agent checkout "${XRCE_AGENT_REF}" \
@@ -36,29 +36,39 @@ RUN source /opt/ros/jazzy/setup.bash \
         -DUAGENT_USE_SYSTEM_FASTDDS=ON \
         -DUAGENT_USE_SYSTEM_FASTCDR=ON \
         -DUAGENT_P2P_PROFILE=OFF \
-    && cmake --build /tmp/agent/build --parallel 4 \
+    && cmake --build /tmp/agent/build --parallel "${BUILD_JOBS}" \
     && cmake --install /tmp/agent/build \
     && ldconfig \
     && rm -rf /tmp/agent
 
 WORKDIR /opt/px4_ros2
+ARG PX4_MSGS_REF=8fb8277cf95c4ba87094146bc8922e76c4ac0799
 RUN git clone https://github.com/PX4/px4_msgs.git src/px4_msgs \
     && git -C src/px4_msgs checkout "${PX4_MSGS_REF}" \
-    && rm -rf src/px4_msgs/msg src/px4_msgs/srv \
-    && git clone https://github.com/Auterion/px4-ros2-interface-lib.git src/px4-ros2-interface-lib \
+    && rm -rf src/px4_msgs/msg src/px4_msgs/srv
+
+ARG PX4_ROS2_REF=7e082628e89ec1825e19ca59f5f1c5deebd1f844
+RUN git clone https://github.com/Auterion/px4-ros2-interface-lib.git src/px4-ros2-interface-lib \
     && git -C src/px4-ros2-interface-lib checkout "${PX4_ROS2_REF}"
 
-# Definitions come from the same checkout as the parent image's PX4 package.
-COPY px4_msgs/ src/px4_msgs/
+# Dependencies use package manifests, not the generated message definitions.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     source /opt/ros/jazzy/setup.bash \
-    && rosdep init \
-    && rosdep update --rosdistro jazzy \
     && apt-get update \
-    && rosdep install --from-paths src --ignore-src --rosdistro jazzy -y \
-    && CMAKE_BUILD_PARALLEL_LEVEL=4 colcon build --symlink-install \
+    && rosdep install --from-paths src --ignore-src --rosdistro jazzy -y
+
+# Definitions come from the same checkout as the parent image's PX4 package.
+COPY px4_msgs/ src/px4_msgs/
+RUN --mount=type=cache,target=/root/.cache/ccache,sharing=locked \
+    source /opt/ros/jazzy/setup.bash \
+    && export CCACHE_DIR=/root/.cache/ccache CCACHE_MAXSIZE=500M CCACHE_COMPILERCHECK=content \
+    && CMAKE_BUILD_PARALLEL_LEVEL="${BUILD_JOBS}" colcon build --symlink-install \
         --executor sequential --cmake-args -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+    && ccache --show-stats
+
+RUN source /opt/ros/jazzy/setup.bash \
     && colcon test --packages-select px4_ros2_cpp --ctest-args -R unit_tests \
     && colcon test-result --verbose
 
