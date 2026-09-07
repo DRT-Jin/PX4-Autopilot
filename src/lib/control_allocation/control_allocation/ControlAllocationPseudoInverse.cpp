@@ -49,6 +49,10 @@ ControlAllocationPseudoInverse::setEffectivenessMatrix(
 {
 	ControlAllocation::setEffectivenessMatrix(effectiveness, actuator_trim, linearization_point, num_actuators,
 			update_normalization_scale);
+
+	// in place on the stored copy: no second matrix on the (small work queue) stack
+	_dropped_axes = dropDependentAxes(_effectiveness);
+
 	_mix_update_needed = true;
 	_normalization_needs_update = update_normalization_scale;
 
@@ -62,7 +66,15 @@ void
 ControlAllocationPseudoInverse::updatePseudoInverse()
 {
 	if (_mix_update_needed) {
-		matrix::geninv(_effectiveness, _mix);
+		// the pseudo-inverse squares the condition number of the effectiveness matrix: the 6x6 kernel needs double
+		if (!matrix::geninvMixedPrecision(_effectiveness, _mix)) {
+			// _mix untouched: keep previous allocation
+			_effectiveness_inversion_failed = true;
+			_mix_update_needed = false;
+			return;
+		}
+
+		_effectiveness_inversion_failed = false;
 
 		if (!_metric_allocation) {
 			if (_normalization_needs_update && !_had_actuator_failure) {
@@ -186,4 +198,51 @@ ControlAllocationPseudoInverse::allocate()
 
 	// Allocate
 	_actuator_sp = _actuator_trim + _mix * (_control_sp - _control_trim);
+}
+
+uint8_t
+ControlAllocationPseudoInverse::dropDependentAxes(matrix::Matrix<float, NUM_AXES, NUM_ACTUATORS> &effectiveness)
+{
+	// highest priority first
+	static constexpr ControlAxis kPriority[NUM_AXES] = {THRUST_Z, ROLL, PITCH, THRUST_X, THRUST_Y, YAW};
+
+	ActuatorVector basis[NUM_AXES];
+	int num_basis = 0;
+	uint8_t dropped = 0;
+
+	for (const ControlAxis axis : kPriority) {
+		ActuatorVector row;
+
+		for (int j = 0; j < NUM_ACTUATORS; j++) {
+			row(j) = effectiveness(axis, j);
+		}
+
+		const float norm_squared = row.norm_squared();
+
+		if (norm_squared < FLT_EPSILON) {
+			continue; // unused axis
+		}
+
+		row /= sqrtf(norm_squared);
+
+		// modified Gram-Schmidt
+		for (int k = 0; k < num_basis; k++) {
+			row -= basis[k] * row.dot(basis[k]);
+		}
+
+		const float independence = row.norm_squared();
+
+		if (independence < kMinAxisIndependence) {
+			for (int j = 0; j < NUM_ACTUATORS; j++) {
+				effectiveness(axis, j) = 0.f;
+			}
+
+			dropped |= static_cast<uint8_t>(1u << axis);
+
+		} else {
+			basis[num_basis++] = row / sqrtf(independence);
+		}
+	}
+
+	return dropped;
 }

@@ -247,6 +247,13 @@ public:
 
 	void setNormalizeRPY(bool normalize_rpy) { _normalize_rpy = normalize_rpy; }
 
+	/// Axes (bitmask over ControlAxis) dropped from the effectiveness matrix as not independently
+	/// achievable, e.g. yaw when collinear with roll after a motor failure
+	uint8_t getDroppedAxes() const { return _dropped_axes; }
+
+	/// True if the last effectiveness matrix could not be inverted (previous allocation kept)
+	bool effectivenessInversionFailed() const { return _effectiveness_inversion_failed; }
+
 protected:
 	friend class ControlAllocator; // for _actuator_sp
 
@@ -263,4 +270,6 @@ protected:
 	int _num_actuators{0};
 	bool _normalize_rpy{false};				///< if true, normalize roll, pitch and yaw columns
 	bool _had_actuator_failure{false};
+	uint8_t _dropped_axes{0};				///< bitmask over ControlAxis
+	bool _effectiveness_inversion_failed{false};
 };

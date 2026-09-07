@@ -447,6 +447,8 @@ ControlAllocator::Run()
 			}
 
 			_control_allocation[i]->clipActuatorSetpoint();
+
+			check_allocation_health(i);
 		}
 	}
 
@@ -631,6 +633,29 @@ ControlAllocator::handle_stopped_motors(const hrt_abstime now)
 				_control_allocation[allocation_index]->_actuator_sp(motors_idx) = ice_shedding_output;
 			}
 		}
+	}
+}
+
+void
+ControlAllocator::check_allocation_health(int matrix_index)
+{
+	const uint8_t dropped_axes = _control_allocation[matrix_index]->getDroppedAxes();
+
+	if (dropped_axes != _dropped_axes_reported[matrix_index]) {
+		_dropped_axes_reported[matrix_index] = dropped_axes;
+
+		if (dropped_axes != 0) {
+			PX4_WARN("Control allocation %i: dropped dependent control axes 0x%x", matrix_index, dropped_axes);
+
+		} else {
+			PX4_INFO("Control allocation %i: all control axes restored", matrix_index);
+		}
+	}
+
+	if (_control_allocation[matrix_index]->effectivenessInversionFailed()
+	    && !_inversion_failure_reported[matrix_index]) {
+		_inversion_failure_reported[matrix_index] = true;
+		PX4_ERR("Control allocation %i: effectiveness inversion failed, keeping previous", matrix_index);
 	}
 }
 
@@ -1031,6 +1056,10 @@ int ControlAllocator::print_status()
 
 		printf("\n");
 		PX4_INFO("  Configured actuators: %i", num_configured);
+
+		if (_control_allocation[i]->getDroppedAxes() != 0) {
+			PX4_INFO("  Dropped control axes: 0x%x", _control_allocation[i]->getDroppedAxes());
+		}
 	}
 
 	if (_handled_motor_failure_bitmask) {
