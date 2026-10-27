@@ -1,3 +1,19 @@
+> **About this fork**
+>
+> This fork exists only to send pull requests to [PX4/PX4-Autopilot](https://github.com/PX4/PX4-Autopilot).
+> It does not contain DRT product code. DRT's flight-controller firmware is kept in a separate private repository.
+>
+> | Branch | Purpose |
+> |---|---|
+> | `drt-jin/home-position-altitude-correction` | [PX4/PX4-Autopilot#28611](https://github.com/PX4/PX4-Autopilot/pull/28611) — fix(commander): fix in-air home altitude and altitude correction state |
+> | `main` | Mirror of upstream `main` (base for new pull requests) |
+>
+> New pull-request branches start from the latest upstream `main`. Please discuss changes on the upstream pull request.
+>
+> 이 포크는 PX4/PX4-Autopilot 에 pull request 를 보내기 위해서만 쓴다. DRT 제품 코드는 여기에 없고, DRT 비행 제어 펌웨어는 별도의 비공개 저장소에서 관리한다.
+
+---
+
 <p align="center">
   <a href="https://px4.io">
     <img src="docs/assets/site/px4_logo.svg" alt="PX4 Autopilot" width="240">
